@@ -212,19 +212,22 @@ describe("ConsoleAuditSink", () => {
   it("writes JSON lines to stderr", () => {
     const sink = new ConsoleAuditSink();
     const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const entry: AuditEntry = {
-      at: new Date(),
-      callerId: CALLER,
-      sessionId: SESSION_A,
-      rail: "telegram",
-      functionName: "list_session_members",
-      outcome: "ok",
-    };
-    sink.record(entry);
-    expect(writeSpy).toHaveBeenCalledTimes(1);
-    const line = writeSpy.mock.calls[0]?.[0] as string;
-    expect(line).toContain('"kind":"audit"');
-    expect(line.endsWith("\n")).toBe(true);
-    writeSpy.mockRestore();
+    try {
+      const entry: AuditEntry = {
+        at: new Date(),
+        callerId: CALLER,
+        sessionId: SESSION_A,
+        rail: "telegram",
+        functionName: "list_session_members",
+        outcome: "ok",
+      };
+      sink.record(entry);
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+      const line = writeSpy.mock.calls[0]?.[0] as string;
+      expect(line).toContain('"kind":"audit"');
+      expect(line.endsWith("\n")).toBe(true);
+    } finally {
+      writeSpy.mockRestore();
+    }
   });
 });
