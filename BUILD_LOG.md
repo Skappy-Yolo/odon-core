@@ -4,6 +4,24 @@ A public devlog written as the work happens. Each entry is dated and signed. Thi
 
 ---
 
+## 2026-05-12 — Day 0, latest: the bot is operational
+
+Did the thing I said was next. The Telegram adapter is wired into Fastify, the command router exists, and there are two operational scripts plus an `operations.md` that walks through setup from scratch.
+
+The `/webhook/telegram` route is the only stateful endpoint on the engine right now. It runs the adapter's `verifyWebhookSignature` first and drops with 401 if the secret token header doesn't match. If verification passes, it normalizes the update and routes via `parseCommand`. Errors during routing or sending get logged and then 200-acked, because Telegram retrying a failed handler doesn't make the bug go away; logs do. If the env vars aren't set, the route just isn't registered and the server still serves `/health` for local dev.
+
+Command router only has three substantive paths: `/start` and `/help` return a welcome message that mentions the commands and includes the privacy line ("I only read free/busy from calendars, never event titles"), and `/find_time`, `/where`, `/confirm` all stub-reply with "scaffolded but not wired" so a user gets a response rather than silence. The next sitting wires those three to the session orchestrator + the dispatcher + the data layer.
+
+Two bin scripts. `npm run telegram:set-webhook` registers the public URL with Telegram and stores the secret token. `npm run telegram:delete-webhook` clears it for resets and rotations. Both take env input and fail loudly if anything's missing.
+
+`docs/operations.md` is for the first deploy. Specifically called out the gotcha about Telegram's bot privacy default, which is on, which means the bot silently sees nothing in groups until you go into `@BotFather → /setprivacy → Disable`. I hit this in proactive-friend-bot back in January and spent an embarrassing amount of time wondering why the bot was deaf. Documenting it now so the next person who hits it spends ten seconds instead of an hour.
+
+Eleven commits. Sixty-one tests, all green. Zero npm audit findings. Three things only the human can do from here: provision Postgres + a Telegram bot token, deploy somewhere with a public HTTPS URL, and run `npm run telegram:set-webhook`. After that, `/start` in a real group should print the welcome. The orchestrator-wired flow for `/find_time` is the next code milestone.
+
+— Emmanuel
+
+---
+
 ## 2026-05-12 — Day 0, late: the data layer and the first real rail
 
 Two more commits, both substantial. The engine now has a place to put things and a way to hear from users.
