@@ -33,12 +33,14 @@ $outPath = Join-Path $screenshotsDir $filename
 
 if ($Window) {
     # Active window bounds via P/Invoke. Falls back to virtual screen if it fails.
+    # Fully-qualified attribute names so we don't need -UsingNamespace, which
+    # collides with Add-Type's implicit using-directive insertion.
     $sig = @"
-[DllImport("user32.dll")]
+[System.Runtime.InteropServices.DllImport("user32.dll")]
 public static extern IntPtr GetForegroundWindow();
-[DllImport("user32.dll")]
+[System.Runtime.InteropServices.DllImport("user32.dll")]
 public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-[StructLayout(LayoutKind.Sequential)]
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
 public struct RECT {
     public int Left;
     public int Top;
@@ -46,7 +48,9 @@ public struct RECT {
     public int Bottom;
 }
 "@
-    Add-Type -MemberDefinition $sig -Name Win32 -Namespace SnapPS -UsingNamespace System.Runtime.InteropServices
+    if (-not ("SnapPS.Win32" -as [type])) {
+        Add-Type -MemberDefinition $sig -Name Win32 -Namespace SnapPS
+    }
     $hwnd = [SnapPS.Win32]::GetForegroundWindow()
     $rect = New-Object SnapPS.Win32+RECT
     [void][SnapPS.Win32]::GetWindowRect($hwnd, [ref]$rect)
