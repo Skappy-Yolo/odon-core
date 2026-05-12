@@ -1,3 +1,16 @@
-// Postgres schema and queries. Encrypted token vault for OAuth credentials
-// (envelope encryption with KMS-wrapped key). Audit log is append-only.
-export {};
+export { getPool, closePool } from "./pool.js";
+export type {
+  AuditLogRow,
+  CalendarProvider,
+  CalendarScope,
+  CalendarTokenRow,
+  FreeBusyCacheRow,
+  GroupRow,
+  HangoutRow,
+  RailId,
+  SessionMemberRow,
+  SessionMemberStatus,
+  SessionRow,
+  SessionStatus,
+  UserRow,
+} from "./types.js";
