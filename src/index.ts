@@ -1,5 +1,7 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import helmet from "@fastify/helmet";
+import { TelegramAdapter } from "./adapters/telegram/adapter.js";
+import { routeCommand } from "./adapters/telegram/commands.js";
 
 const ALLOWED_LOG_LEVELS = ["fatal", "error", "warn", "info", "debug"] as const;
 type LogLevel = (typeof ALLOWED_LOG_LEVELS)[number];
@@ -30,15 +32,79 @@ async function main(): Promise<void> {
   await app.register(helmet);
 
   // CORS is intentionally NOT enabled here. Endpoints live behind webhooks
-  // (HMAC-signed) and the engine HTTP API (server-to-server, internal).
-  // Browser-origin access is not a use case. Add @fastify/cors only when a
-  // specific browser client (e.g. odon-web) is introduced, and lock origins
-  // explicitly at that point.
+  // (HMAC / secret-token verified) and the engine HTTP API (server-to-
+  // server, internal). Browser-origin access is not a use case. Add
+  // @fastify/cors only when a specific browser client (e.g. odon-web) is
+  // introduced, and lock origins explicitly at that point.
 
   app.get("/health", async () => ({ status: "ok", service: "odon-core", version: "0.0.1" }));
 
+  registerTelegramAdapter(app);
+
   await app.listen({ port: PORT, host: "0.0.0.0" });
   app.log.info(`odon-core listening on :${PORT}`);
+}
+
+/**
+ * Constructs the Telegram adapter from env and registers its webhook
+ * route. Skipped (with a single info-level log line) if the necessary
+ * env vars are not set; this lets `/health` come up for dev without
+ * configuring Telegram.
+ */
+function registerTelegramAdapter(app: FastifyInstance): void {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const webhookSecretToken = process.env.TELEGRAM_WEBHOOK_SECRET;
+
+  if (!botToken || !webhookSecretToken) {
+    app.log.info(
+      "telegram adapter not configured (TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET required) — skipping registration",
+    );
+    return;
+  }
+
+  const adapter = new TelegramAdapter({ botToken, webhookSecretToken });
+
+  app.post("/webhook/telegram", async (req: FastifyRequest, reply: FastifyReply) => {
+    // Header normalization: Fastify gives us a Record<string, string|string[]|undefined>.
+    // The adapter contract uses Record<string, string>. Coerce, joining arrays.
+    const headers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (Array.isArray(v)) headers[k] = v.join(", ");
+      else if (typeof v === "string") headers[k] = v;
+    }
+
+    const bodyString = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+
+    if (!adapter.verifyWebhookSignature(headers, bodyString)) {
+      req.log.warn("telegram webhook: signature verification failed; dropping");
+      return reply.code(401).send({ ok: false });
+    }
+
+    const incoming = adapter.normalize(req.body);
+    if (!incoming) {
+      // Update kind we don't handle yet (callback queries, edited messages,
+      // channel posts, etc). Ack so Telegram stops retrying.
+      return reply.code(200).send({ ok: true });
+    }
+
+    try {
+      const outgoing = routeCommand(incoming);
+      if (outgoing) {
+        await adapter.send(outgoing);
+      }
+    } catch (err) {
+      req.log.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        "telegram webhook: error while routing/sending",
+      );
+      // Still ack 200: the message landed, we just couldn't reply.
+      // Logging is the line of defence; Telegram retrying won't help.
+    }
+
+    return reply.code(200).send({ ok: true });
+  });
+
+  app.log.info("telegram adapter registered at POST /webhook/telegram");
 }
 
 main().catch((err: unknown) => {

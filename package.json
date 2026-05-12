@@ -17,7 +17,9 @@
     "test:watch": "vitest",
     "lint": "eslint . --ext .ts",
     "migrate": "tsx src/db/migrate.ts",
-    "migrate:dry": "tsx src/db/migrate.ts --dry-run"
+    "migrate:dry": "tsx src/db/migrate.ts --dry-run",
+    "telegram:set-webhook": "tsx src/adapters/telegram/bin/set-webhook.ts",
+    "telegram:delete-webhook": "tsx src/adapters/telegram/bin/delete-webhook.ts"
   },
   "dependencies": {
     "@fastify/helmet": "^13.0.0",
