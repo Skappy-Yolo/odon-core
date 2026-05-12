@@ -4,6 +4,28 @@ A public devlog written as the work happens. Each entry is dated and signed. Thi
 
 ---
 
+## 2026-05-12 — Day 0, late: the data layer and the first real rail
+
+Two more commits, both substantial. The engine now has a place to put things and a way to hear from users.
+
+The data layer was the easier of the two. I lifted ideas from both predecessors without lifting code from either. `hangout-pwa` had a richer schema but depended on Supabase's `auth.users` table, which is fine if you're building a Supabase app and very much not fine if you're building a bot whose users are identified by Telegram or WhatsApp IDs. `proactive-friend-bot` had a simpler schema but had `whatsapp_id` columns everywhere, which would make the same data unusable when we added the Telegram adapter. The new schema is rail-agnostic in the way the rest of the engine is: every user and group carries `(rail, platform_user_id)` or `(rail, platform_group_id)`. The same `users` table holds a Telegram user, a WhatsApp user, and an OpenClaw user side by side; the rail discriminator decides which.
+
+Eight tables in the initial migration: `users`, `groups`, `calendar_tokens` (with `provider` and `scope` columns so we can support Google + Microsoft + iCloud, with `scope` defaulting to `freebusy` and only the `/autoadd` flow upgrading), `sessions` (with the `short_code` slug that goes in `wa.me/?text=join_<short_code>` and `t.me/?start=<short_code>` invite links), `session_members` (with a `password_verified` flag for the WhatsApp Cloud password gate), `free_busy_cache`, `hangouts`, and an append-only `audit_log`. No RLS policies because we're not multi-tenant yet, and adding RLS as a retrofit is easier than living with the wrong rules now. A tiny migration runner sits next to the SQL: lists `*.sql` files in `src/db/migrations/`, applies each one inside a transaction, records it in `schema_migrations`. There's a `--dry-run` mode that works without a database connection because asking for a database to dry-run a migration is the wrong shape.
+
+The Telegram adapter was the bigger commit. Six source files, three test files, twenty new tests, fifty in total across the suite. I considered grammy and walked away from it. Grammy is good and most TypeScript Telegram bots use it. But I only need two HTTP endpoints (`sendMessage` now, `setWebhook` later) and a thin client makes the adapter contract more visible than wrapping a framework in another framework. Native `fetch`, hand-typed Bot API slice, sixty lines for the client.
+
+The interesting part of the adapter, and the part I want to come back to in the security post, is what `verifyWebhookSignature` does. Telegram's webhook security model is unusual. There's no HMAC the way Stripe or GitHub does it. When you register the webhook with `setWebhook`, you provide a "secret token", and Telegram echoes it back to you in the `X-Telegram-Bot-Api-Secret-Token` header on every update. You compare in constant time using `crypto.timingSafeEqual`. If you do this naively with a `===` comparison, you have a timing oracle: an attacker can measure response time differences character by character and discover your token one byte at a time. The test for that case exists.
+
+I noticed a contract design hole while writing the adapter. The original `IncomingMessage.user` required a fully-resolved `User` with the engine's internal UUID, but the adapter doesn't have the UUID; it only knows the platform's user ID. So I split the types: `IncomingUser` is what the adapter knows (rail, platform user ID, display name), `User` is what the engine returns after resolving against the database (`IncomingUser` plus the internal `id`). Same split for groups. The `normalize` function returns an `IncomingMessage` with `IncomingUser`; the engine does the upsert into the `users` table after receive. Eight extra lines, cleaner contract.
+
+What's NOT wired yet, and is the next move whenever the next sitting happens: the Fastify route `/webhook/telegram` that takes a real incoming request, runs `adapter.verifyWebhookSignature` at the edge, drops unverified, then hands the normalized message to a command router that routes `/start` to a welcome handler, `/find_time` to the session orchestrator, and so on. The `setWebhook` bootstrap script. The end-to-end happy path running against a real BotFather token in a real test group. None of that exists today. What exists today is the parts that pass tests offline.
+
+Seven commits on `master`, all signed off, fifty tests green, two npm scripts (`migrate` and `migrate:dry`), one helper tool (`text-to-image.ps1`) that has earned its keep, and a working engine spine. Pushing now.
+
+— Emmanuel
+
+---
+
 ## 2026-05-12 — Day 0, evening: scaffold, the algorithm, and the security seam
 
 Four commits in one sitting. The engine exists now.
