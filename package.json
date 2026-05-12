@@ -1,0 +1,46 @@
+{
+  "name": "odon-core",
+  "version": "0.0.1",
+  "description": "Group hangouts in your group chats. The platform-agnostic engine.",
+  "license": "AGPL-3.0-or-later",
+  "private": false,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint . --ext .ts"
+  },
+  "dependencies": {
+    "@fastify/helmet": "^13.0.0",
+    "fastify": "^5.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "eslint": "^9.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.6"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Skappy-Yolo/odon-core"
+  },
+  "keywords": [
+    "telegram-bot",
+    "openclaw",
+    "gemini",
+    "calendar",
+    "scheduling",
+    "hangout",
+    "friend-group",
+    "oss"
+  ]
+}
