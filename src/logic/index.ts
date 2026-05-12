@@ -1,3 +1,10 @@
-// Pure logic: overlap detection, ranking, venue scoring, permission checks.
-// No I/O, no LLM calls. Functions in this folder must be deterministic and unit-testable.
-export {};
+export { findOverlapWindows, intervalsOverlap, memberIsFree } from "./overlap.js";
+export { rankOverlapWindows, scoreWindow } from "./ranking.js";
+export type {
+  BusySlot,
+  FindOverlapInput,
+  MemberAvailability,
+  OverlapWindow,
+  RankedOverlap,
+  TimeWindow,
+} from "./types.js";
