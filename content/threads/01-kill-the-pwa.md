@@ -13,7 +13,7 @@ In April, OpenClaw made me realize I was building the wrong thing.
 
 So I killed all three and started over. Here is what I learned.
 
-[IMG: screenshot of the three old repos on your GitHub profile, side by side]
+[IMG: content/images/01-three-old-repos.png]
 
 ---
 
@@ -39,7 +39,7 @@ It used Baileys, which is reverse-engineered WhatsApp Web. The README literally 
 
 You cannot build a serious product on a library that asks you to use a burner phone.
 
-[IMG: screenshot of the README warning from proactive-friend-bot]
+[IMG: content/images/02-baileys-burner-phone.png]
 
 ---
 
@@ -63,7 +63,7 @@ So I am rebuilding it as `odon-core`. An open-source TypeScript engine with thin
 
 Telegram first. Then OpenClaw skill. Then WhatsApp Cloud (the official one, not Baileys). Then Discord. Then a web demo.
 
-[IMG: screenshot of the docs/architecture.md system diagram]
+[IMG: content/images/03-system-architecture.png]
 
 ---
 
@@ -75,9 +75,9 @@ What I shipped today:
 - The dispatcher that sits between Gemini and the engine, with Zod arg validation, per-function permissions, a per-session call budget, and an audit sink
 - A security model that does not lie about what is and is not protected yet
 
-Four commits. Thirty tests. All green.
+Five commits. Thirty tests. All green.
 
-[IMG: screenshot of `npm test` output showing 30/30 passed]
+[IMG: content/images/04-tests-30-of-30.png]
 
 ---
 
@@ -101,4 +101,4 @@ Repo is at github.com/Skappy-Yolo/odon-core. AGPL-3.0. Build log in /BUILD_LOG.m
 
 If you've ever spent forty minutes in a WhatsApp group trying to find a time everyone is free, this is for you.
 
-[IMG: small GIF of /health endpoint returning ok, or git log showing the four signed-off commits]
+[IMG: content/images/05-git-log-signed-off.png]
