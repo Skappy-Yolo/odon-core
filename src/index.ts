@@ -1,7 +1,8 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import helmet from "@fastify/helmet";
 import { TelegramAdapter } from "./adapters/telegram/adapter.js";
-import { routeCommand } from "./adapters/telegram/commands.js";
+import { createCommandRouter, routeCommand } from "./adapters/telegram/commands.js";
+import { getPool } from "./db/pool.js";
 
 const ALLOWED_LOG_LEVELS = ["fatal", "error", "warn", "info", "debug"] as const;
 type LogLevel = (typeof ALLOWED_LOG_LEVELS)[number];
@@ -50,6 +51,10 @@ async function main(): Promise<void> {
  * route. Skipped (with a single info-level log line) if the necessary
  * env vars are not set; this lets `/health` come up for dev without
  * configuring Telegram.
+ *
+ * Uses the orchestrator-wired router (real /find_time) when DATABASE_URL
+ * is also set; otherwise falls back to the sync stub router so /start
+ * still works without a database.
  */
 function registerTelegramAdapter(app: FastifyInstance): void {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -63,6 +68,14 @@ function registerTelegramAdapter(app: FastifyInstance): void {
   }
 
   const adapter = new TelegramAdapter({ botToken, webhookSecretToken });
+
+  const hasDatabase = Boolean(process.env.DATABASE_URL);
+  const router = hasDatabase
+    ? createCommandRouter({ orchestrator: { db: getPool() }, botUsername: process.env.TELEGRAM_BOT_USERNAME })
+    : null;
+  if (!hasDatabase) {
+    app.log.info("DATABASE_URL not set — /find_time will reply with a stub instead of creating a session");
+  }
 
   app.post("/webhook/telegram", async (req: FastifyRequest, reply: FastifyReply) => {
     // Header normalization: Fastify gives us a Record<string, string|string[]|undefined>.
@@ -88,7 +101,7 @@ function registerTelegramAdapter(app: FastifyInstance): void {
     }
 
     try {
-      const outgoing = routeCommand(incoming);
+      const outgoing = router ? await router(incoming) : routeCommand(incoming);
       if (outgoing) {
         await adapter.send(outgoing);
       }
