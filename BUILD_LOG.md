@@ -4,6 +4,24 @@ A public devlog written as the work happens. Each entry is dated and signed. Thi
 
 ---
 
+## 2026-05-13 — Day 1: real bot, real reply
+
+The bot replied to `/start` in Telegram for the first time today. It works.
+
+Setup took about fifteen minutes end-to-end: BotFather (`/newbot`, `/setprivacy → Disable`), a free Supabase Postgres, `npm run migrate` against the new database, `cloudflared tunnel --url http://localhost:3000` instead of ngrok (no signup, no authtoken, the quick-tunnel URL pops out and that becomes `ODON_PUBLIC_URL`), `npm run telegram:set-webhook`, then send `/start` in Telegram and the bot answered. The whole chain works: Telegram cloud sends an Update to a `*.trycloudflare.com` URL, cloudflared forwards it to `http://localhost:3000/webhook/telegram`, the engine verifies the secret token in `X-Telegram-Bot-Api-Secret-Token`, normalizes the update, routes to the `/start` handler, and sends a reply back via Telegram's `sendMessage` API. End to end in about two seconds, mostly Telegram-side latency.
+
+Two small papercuts to fix on the way:
+
+The dev script had the wrong flag order: `tsx --env-file-if-exists=.env watch src/index.ts` interprets `watch` as a positional argument (a filename) rather than the subcommand. It needs to be `tsx watch --env-file-if-exists=.env src/index.ts`. Once I fixed that, the engine started clean. Worth committing.
+
+Port 3000 was already busy with a node process from yesterday's testing that I hadn't stopped properly. Killed via PID. Lesson: when you start servers in background during dev, keep track of them or you'll fight your own ghost an hour later.
+
+The bot's behaviour today is intentionally thin. `/start` and `/help` show the welcome message that lists the four commands and includes the privacy line ("I only read free/busy from calendars, never event titles"). `/find_time`, `/where`, `/confirm` all reply with a "scaffolded but not wired" stub. That's correct: today's milestone was the wire-up, not the product. The next code milestone, when whenever it lands, is wiring `/find_time` to actually create a session in Postgres, fan out OAuth requests to the unconnected group members, run the quorum / deadline orchestrator, and call the dispatcher's `propose_times` function we tested two days ago against the real overlap algorithm.
+
+— Emmanuel
+
+---
+
 ## 2026-05-12 — Day 0, latest: the bot is operational
 
 Did the thing I said was next. The Telegram adapter is wired into Fastify, the command router exists, and there are two operational scripts plus an `operations.md` that walks through setup from scratch.
