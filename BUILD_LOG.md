@@ -4,6 +4,22 @@ A public devlog written as the work happens. Each entry is dated and signed. Thi
 
 ---
 
+## 2026-05-13 — Day 1, later: `/find_time` actually creates rows
+
+`/find_time movie this weekend` in a Telegram group called "Journal" returned `Code: PB9JACaZ`, and the matching row is now in Supabase. Querying the `sessions` table from a second process shows label, deadline, and status exactly as the bot reported. The `groups` table has Journal, the `users` table has the initiator. The orchestrator works end to end.
+
+Two real obstacles came up on the way that are worth writing down.
+
+First, the engine in `tsx watch` mode did not actually pick up the source changes I made to wire the orchestrator. The PID stayed the same after I edited five files, which means hot reload silently skipped the new code. The webhook handler kept routing to the old sync stub. Killing the watch process and starting `npm run dev` fresh got the new code loaded. Lesson: tsx watch is convenient until it isn't, and "the PID hasn't changed" is the cheapest signal that the restart didn't happen.
+
+Second, Supabase free-tier projects only expose their direct connection (`db.<project-id>.supabase.co`) over IPv6. The Pg client failed with `ENOTFOUND` because my network resolved the name only via AAAA records and couldn't reach the IPv6 address. The migration earlier had worked through that path, so I assumed the URL was fine. It wasn't, on a different network at a different hour. The fix was to switch the connection string to Supabase's transaction pooler, `aws-0-<region>.pooler.supabase.com:6543`, which serves IPv4. Finding the right region took a brute-force loop across nine regions because Supabase doesn't tell you which region your project is in without going into the dashboard. eu-west-1 won. Documenting this in `docs/operations.md` for the next time someone hits it.
+
+The bot's reply today still says "Next step (coming): each member connects their calendar and the bot proposes times where most of you are free." That's true. The session row exists, the data is shaped right, the IDs are opaque, but there's nothing yet to fan out OAuth requests to other group members or call the dispatcher's `propose_times` against real free/busy data. Those are the next two commits.
+
+— Emmanuel
+
+---
+
 ## 2026-05-13 — Day 1: real bot, real reply
 
 The bot replied to `/start` in Telegram for the first time today. It works.

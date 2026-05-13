@@ -90,6 +90,8 @@ You only need to re-run `telegram:set-webhook` if `ODON_PUBLIC_URL` or `TELEGRAM
 - **Bot is silent in a group.** Group Privacy is on (Telegram's default). Disable it via BotFather: `/setprivacy` → pick bot → **Disable**.
 - **Webhook returns 401.** `TELEGRAM_WEBHOOK_SECRET` in env doesn't match what was registered with Telegram. Re-run `npm run telegram:set-webhook` after setting the env correctly.
 - **No reply at all and no 401.** Check the engine logs. Common causes: `npm run migrate` not run yet (DB queries will fail), Postgres unreachable, or the bot token rejected by Telegram on the outgoing reply.
+- **`getaddrinfo ENOTFOUND db.<project>.supabase.co`.** Supabase free-tier direct connections are IPv6-only and your Node process or network can't route there. Switch to the transaction pooler, which serves IPv4. The format is `postgresql://postgres.<project-ref>:[password]@aws-0-<region>.pooler.supabase.com:6543/postgres`. You can find both the project ref and the region in Supabase Dashboard → Project Settings → Database → Connection string (pick "Transaction pooler"). The migration runner and the engine work against the pooler URL the same way as the direct URL.
+- **`tsx watch` doesn't seem to be loading new code.** Kill `npm run dev` and start it again. Watch occasionally silently skips a reload. The cheapest signal that this happened is the engine PID not changing after a save.
 - **You want to start over.** `npm run telegram:delete-webhook` clears the Telegram registration cleanly.
 
 ## Reset
