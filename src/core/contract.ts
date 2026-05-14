@@ -61,7 +61,31 @@ export interface IncomingMessage {
   readonly receivedAt: Date;
   readonly user: IncomingUser;
   readonly group: IncomingGroup | null;
+  /**
+   * Text body for normal messages. Empty string for pure button presses
+   * (the actual payload then lives in `callback.data`).
+   */
   readonly text: string;
+  /**
+   * Set when this update is a callback query (e.g. user tapped an inline
+   * keyboard button on Telegram). The router branches on this:
+   *   - if callback is set, treat `callback.data` as the action payload
+   *     (e.g. "vote.<session_id>.<window_idx>.<hmac>")
+   *   - if callback is null/undefined, parse `text` as a slash command
+   *
+   * Rails that don't have this concept (e.g. WhatsApp Cloud) won't ever
+   * set it. The field is optional so they can omit it cleanly.
+   */
+  readonly callback?: {
+    /** The callback_data string the bot set on the button. */
+    readonly data: string;
+    /**
+     * Platform-specific callback ID. The adapter uses it to acknowledge
+     * the callback within the platform's deadline (Telegram requires
+     * `answerCallbackQuery` within ~3 seconds or it retries the update).
+     */
+    readonly queryId: string;
+  };
   /** Original platform payload, for adapters that need to look back at things normalize didn't capture. */
   readonly raw: unknown;
 }

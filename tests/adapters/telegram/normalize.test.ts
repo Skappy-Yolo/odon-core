@@ -111,3 +111,90 @@ describe("normalizeTelegramUpdate", () => {
     expect(out?.raw).toBe(raw);
   });
 });
+
+describe("normalizeTelegramUpdate — callback_query", () => {
+  const callbackBase = {
+    update_id: 9,
+    callback_query: {
+      id: "cb-id-abc123",
+      from: { id: 42, is_bot: false, first_name: "Sarah" },
+      message: {
+        message_id: 50,
+        date: 1_750_000_000,
+        chat: { id: -100, type: "supergroup", title: "The Squad" },
+      },
+      data: "vote.s_abc123.2.deadbeef",
+    },
+  } as TelegramUpdate;
+
+  it("normalizes a callback_query press in a group", () => {
+    const out = normalizeTelegramUpdate(callbackBase);
+    expect(out).not.toBeNull();
+    if (out) {
+      expect(out.rail).toBe("telegram");
+      expect(out.text).toBe("");
+      expect(out.callback).toBeDefined();
+      expect(out.callback?.data).toBe("vote.s_abc123.2.deadbeef");
+      expect(out.callback?.queryId).toBe("cb-id-abc123");
+      expect(out.user.platformUserId).toBe("42");
+      expect(out.user.displayName).toBe("Sarah");
+      expect(out.group?.platformGroupId).toBe("-100");
+    }
+  });
+
+  it("normalizes a callback_query press in a private DM (group is null)", () => {
+    const dmCallback: TelegramUpdate = {
+      update_id: 10,
+      callback_query: {
+        id: "cb-id-xyz",
+        from: { id: 7, is_bot: false, first_name: "Mike" },
+        message: {
+          message_id: 1,
+          date: 1_750_000_000,
+          chat: { id: 7, type: "private" },
+        },
+        data: "wait.s_abc",
+      },
+    };
+    const out = normalizeTelegramUpdate(dmCallback);
+    expect(out).not.toBeNull();
+    expect(out?.group).toBeNull();
+    expect(out?.callback?.data).toBe("wait.s_abc");
+  });
+
+  it("returns null when callback_query has no data field", () => {
+    const noData: TelegramUpdate = {
+      update_id: 1,
+      callback_query: {
+        id: "cb-id",
+        from: { id: 1, is_bot: false, first_name: "A" },
+        message: callbackBase.callback_query!.message,
+        // data omitted
+      },
+    };
+    expect(normalizeTelegramUpdate(noData)).toBeNull();
+  });
+
+  it("returns null when callback_query is from a bot", () => {
+    const botPress: TelegramUpdate = {
+      update_id: 2,
+      callback_query: {
+        id: "cb-id",
+        from: { id: 99, is_bot: true, first_name: "OtherBot" },
+        message: callbackBase.callback_query!.message,
+        data: "anything",
+      },
+    };
+    expect(normalizeTelegramUpdate(botPress)).toBeNull();
+  });
+
+  it("text is empty string on callback presses (callers branch on `callback` presence)", () => {
+    const out = normalizeTelegramUpdate(callbackBase);
+    expect(out?.text).toBe("");
+  });
+
+  it("preserves the raw update on callback paths too", () => {
+    const out = normalizeTelegramUpdate(callbackBase);
+    expect(out?.raw).toBe(callbackBase);
+  });
+});
