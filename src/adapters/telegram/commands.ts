@@ -21,7 +21,11 @@ import {
 import type { GoogleOAuthConfig } from "../../auth/google-oauth.js";
 import type { OAuthStateSigner } from "../../auth/oauth-state.js";
 import { buildAuthorizeUrl } from "../../auth/google-oauth.js";
-import { findGroupByPlatform, findOpenSessionForGroup } from "../../db/queries.js";
+import {
+  findGroupByPlatform,
+  findOpenSessionForGroup,
+  listSessionMembers,
+} from "../../db/queries.js";
 import type { FreeBusyProvider } from "../../llm/dispatcher.js";
 import { proposeTimesHandler } from "../../llm/handlers/propose-times.js";
 import type { Pool } from "pg";
@@ -152,6 +156,23 @@ async function proceedReply(
     };
   }
 
+  // Pre-check member state so we can pick a sensible minFreeCount.
+  // With 1 connected member the engine should still show that member's
+  // free times (useful for solo testing). With 2+ connected we want
+  // "at least 2 free" as the floor so the result is a real overlap.
+  const allMembers = await listSessionMembers(db, session.id);
+  const connectedCount = allMembers.filter(
+    (m) => m.hasCalendar && m.providers.includes("google"),
+  ).length;
+  if (connectedCount === 0) {
+    return {
+      target: targetFor(message),
+      text:
+        "Nobody in this session has connected their calendar yet. Tap the join link from /find_time first.",
+    };
+  }
+  const minFreeCount = Math.max(1, Math.min(2, connectedCount));
+
   // Build a DispatchContext and call propose_times directly. The
   // dispatcher's auth + budget + audit machinery would also work, but
   // /proceed is a deterministic user-triggered action (not LLM-driven),
@@ -169,7 +190,7 @@ async function proceedReply(
   const args = {
     sessionId: session.id,
     topN: 3,
-    minFreeCount: 2,
+    minFreeCount,
   };
 
   let result;
@@ -194,11 +215,12 @@ async function proceedReply(
       unreachable > 0
         ? `\n\n${unreachable} member${unreachable === 1 ? "'s" : "s'"} calendar I couldn't read (auth or transport issue).`
         : "";
+    const noun = minFreeCount === 1 ? "free hours" : "windows where at least 2 are free";
     return {
       target: targetFor(message),
       text:
-        `No windows where at least 2 of you are free in the next 7 days.${unreachableNote}\n\n` +
-        `Either more people need to connect their calendar, or you have very different schedules. Try widening the window or coordinate manually for this one.`,
+        `No ${noun} in the next 7 days.${unreachableNote}\n\n` +
+        `Either more people need to connect their calendar, or schedules are packed solid. Try widening the window or coordinate manually for this one.`,
     };
   }
 
