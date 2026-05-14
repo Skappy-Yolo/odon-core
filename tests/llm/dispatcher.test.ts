@@ -84,9 +84,9 @@ describe("Dispatcher.dispatch", () => {
     if (result.ok) {
       const data = result.data as { members: Array<{ memberId: string; status: string }> };
       expect(data.members.length).toBeGreaterThan(0);
-      // The result schema strips anything that's not memberId+status.
+      // The result schema strips anything that's not in the whitelist.
       for (const m of data.members) {
-        expect(Object.keys(m).sort()).toEqual(["memberId", "status"]);
+        expect(Object.keys(m).sort()).toEqual(["hasCalendar", "memberId", "status"]);
       }
     }
     expect(audit.entries.at(-1)?.outcome).toBe("ok");

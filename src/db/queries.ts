@@ -224,5 +224,189 @@ export async function getUserById(q: Queryable, userId: string): Promise<UserRow
   return result.rows[0] ?? null;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2: queries for propose_times wiring
+// ---------------------------------------------------------------------------
+
+export interface SessionMemberWithUser {
+  /** Opaque internal user UUID. */
+  readonly userId: string;
+  /** Platform-side ID for sending DMs back to the user. */
+  readonly platformUserId: string;
+  /** Display name as the platform reports it. */
+  readonly displayName: string;
+  readonly rail: RailId;
+  /** Status in this session: pending / connected / declined. */
+  readonly status: SessionMemberStatus;
+  /** True if this user has at least one calendar provider with a stored token. */
+  readonly hasCalendar: boolean;
+  /** Which provider(s) the user is connected to. Empty if hasCalendar is false. */
+  readonly providers: ReadonlyArray<CalendarProvider>;
+}
+
+/**
+ * List every member of a session along with their calendar-connection state.
+ * Used by propose_times to decide which members to query free/busy for.
+ *
+ * The join collapses calendar_tokens via array_agg so users with multiple
+ * providers (e.g. Google + Microsoft) come back as one row.
+ */
+export async function listSessionMembers(
+  q: Queryable,
+  sessionId: string,
+): Promise<ReadonlyArray<SessionMemberWithUser>> {
+  const result = await q.query<{
+    user_id: string;
+    platform_user_id: string;
+    display_name: string;
+    rail: RailId;
+    status: SessionMemberStatus;
+    providers: ReadonlyArray<CalendarProvider> | null;
+  }>(
+    `SELECT
+       u.id              AS user_id,
+       u.platform_user_id,
+       u.display_name,
+       u.rail,
+       sm.status         AS status,
+       COALESCE(
+         ARRAY_AGG(ct.provider) FILTER (WHERE ct.provider IS NOT NULL),
+         '{}'
+       ) AS providers
+     FROM session_members sm
+     JOIN users u                  ON u.id = sm.user_id
+     LEFT JOIN calendar_tokens ct  ON ct.user_id = u.id
+     WHERE sm.session_id = $1
+     GROUP BY u.id, u.platform_user_id, u.display_name, u.rail, sm.status
+     ORDER BY sm.joined_at ASC`,
+    [sessionId],
+  );
+
+  return result.rows.map((r) => {
+    const providers = r.providers ?? [];
+    return {
+      userId: r.user_id,
+      platformUserId: r.platform_user_id,
+      displayName: r.display_name,
+      rail: r.rail,
+      status: r.status,
+      hasCalendar: providers.length > 0,
+      providers,
+    };
+  });
+}
+
+/**
+ * Fetch a user's calendar token for a specific provider, taking a row-level
+ * lock so concurrent refreshes don't clobber each other. The caller MUST be
+ * inside a transaction (use a PoolClient, not a Pool) — otherwise the lock
+ * is released immediately and the protection is moot.
+ *
+ * Use `SKIP LOCKED` so a second concurrent caller fails fast (returns null)
+ * rather than waiting on the first; the second caller can either retry or
+ * skip this user for the current run.
+ */
+export async function getCalendarTokenForUser(
+  client: import("pg").PoolClient,
+  userId: string,
+  provider: CalendarProvider,
+): Promise<CalendarTokenRow | null> {
+  const result = await client.query<CalendarTokenRow>(
+    `SELECT *
+       FROM calendar_tokens
+       WHERE user_id = $1 AND provider = $2
+       FOR UPDATE SKIP LOCKED`,
+    [userId, provider],
+  );
+  return result.rows[0] ?? null;
+}
+
+/** Non-locking read, suitable for serialisable inspection or out-of-band checks. */
+export async function peekCalendarTokenForUser(
+  q: Queryable,
+  userId: string,
+  provider: CalendarProvider,
+): Promise<CalendarTokenRow | null> {
+  const result = await q.query<CalendarTokenRow>(
+    "SELECT * FROM calendar_tokens WHERE user_id = $1 AND provider = $2",
+    [userId, provider],
+  );
+  return result.rows[0] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// free_busy_cache helpers
+// ---------------------------------------------------------------------------
+
+const DEFAULT_FREE_BUSY_TTL_SECONDS = 60 * 60; // 1 hour
+
+export interface CachedFreeBusy {
+  readonly busyPeriods: ReadonlyArray<{ readonly start: string; readonly end: string }>;
+  readonly fetchedAt: Date;
+}
+
+/**
+ * Read a cached free/busy lookup. Returns null when no row, or when the row
+ * is older than the TTL (default 1 hour). TTL is enforced in code, not via
+ * DB-side cleanup, so stale rows survive but are never returned.
+ */
+export async function readFreeBusyCache(
+  q: Queryable,
+  userId: string,
+  windowStart: Date,
+  windowEnd: Date,
+  options: { readonly ttlSeconds?: number } = {},
+): Promise<CachedFreeBusy | null> {
+  const result = await q.query<{
+    busy_periods: ReadonlyArray<{ start: string; end: string }>;
+    fetched_at: Date;
+  }>(
+    `SELECT busy_periods, fetched_at
+       FROM free_busy_cache
+       WHERE user_id = $1
+         AND window_start = $2
+         AND window_end = $3`,
+    [userId, windowStart, windowEnd],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+
+  const ttl = options.ttlSeconds ?? DEFAULT_FREE_BUSY_TTL_SECONDS;
+  const ageSeconds = (Date.now() - row.fetched_at.getTime()) / 1000;
+  if (ageSeconds > ttl) return null;
+
+  return { busyPeriods: row.busy_periods, fetchedAt: row.fetched_at };
+}
+
+export interface WriteFreeBusyCacheInput {
+  readonly userId: string;
+  readonly windowStart: Date;
+  readonly windowEnd: Date;
+  readonly busyPeriods: ReadonlyArray<{ readonly start: string; readonly end: string }>;
+}
+
+/**
+ * Write or refresh a free/busy cache entry. Upserts on
+ * (user_id, window_start, window_end).
+ */
+export async function writeFreeBusyCache(
+  q: Queryable,
+  input: WriteFreeBusyCacheInput,
+): Promise<void> {
+  await q.query(
+    `INSERT INTO free_busy_cache (user_id, window_start, window_end, busy_periods, fetched_at)
+     VALUES ($1, $2, $3, $4::jsonb, now())
+     ON CONFLICT (user_id, window_start, window_end) DO UPDATE
+       SET busy_periods = EXCLUDED.busy_periods,
+           fetched_at = now()`,
+    [
+      input.userId,
+      input.windowStart,
+      input.windowEnd,
+      JSON.stringify(input.busyPeriods),
+    ],
+  );
+}
+
 // Re-export some commonly-used types for callers that import only this module.
 export type { SessionMemberStatus };

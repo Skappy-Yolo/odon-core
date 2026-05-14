@@ -18,7 +18,31 @@
  */
 
 import { z } from "zod";
+import type { Pool } from "pg";
 import type { FunctionName } from "./functions.js";
+import type { TokenVault } from "../auth/token-vault.js";
+
+/**
+ * Provider interface for reading free/busy from a calendar source. Each
+ * provider (Google, Microsoft, iCloud, manual) implements this and gets
+ * passed into the dispatcher via DispatchContext.providers. Keeping the
+ * interface tight here so handlers don't have to care which provider a
+ * member used to connect — they just call get() with the user and the
+ * window and get back busy intervals.
+ */
+export interface FreeBusyProvider {
+  /**
+   * Returns the user's busy intervals within [windowStart, windowEnd).
+   * Throws on transport / auth errors so the caller can decide per-member
+   * whether to degrade gracefully or fail the whole run.
+   */
+  getFreeBusy(input: {
+    readonly userId: string;
+    readonly windowStart: Date;
+    readonly windowEnd: Date;
+    readonly signal?: AbortSignal;
+  }): Promise<ReadonlyArray<{ readonly start: Date; readonly end: Date }>>;
+}
 
 export interface DispatchContext {
   /** Opaque user ID of whoever triggered the chain (e.g. the human who typed /find_time). */
@@ -27,6 +51,22 @@ export interface DispatchContext {
   readonly sessionId: string;
   /** Rail the request came in on. Used for audit and per-rail policy if needed. */
   readonly rail: string;
+  /**
+   * Data layer. Optional so tests that exercise the dispatcher's plumbing
+   * (auth, budget, output validation) can construct contexts without a
+   * running DB. Handlers that actually need the DB throw a clear error
+   * when it's absent.
+   */
+  readonly db?: Pool;
+  /** Token vault for decrypting calendar OAuth tokens. Optional, same reasoning as `db`. */
+  readonly vault?: TokenVault;
+  /**
+   * Map of provider name -> FreeBusyProvider. Handlers look up the
+   * provider for each session member based on which one(s) the member
+   * connected. Missing entries mean that provider isn't configured at
+   * deploy time; handlers degrade gracefully (skip those members).
+   */
+  readonly providers?: Readonly<Record<string, FreeBusyProvider>>;
 }
 
 export type DispatchSuccess<T> = {
