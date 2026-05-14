@@ -1,0 +1,48 @@
+# Fly.io app config.
+#
+# `app` is taken on `fly launch`; if "odon-core" is taken globally, Fly
+# will suggest alternatives or you can pick your own (e.g. "odon-bot",
+# "odon-core-skappy-yolo"). Whatever it lands on becomes the URL.
+#
+# Region: "ams" (Amsterdam) is the closest free-tier region to Belgium.
+# Change to "fra" (Frankfurt) or "cdg" (Paris) if you prefer.
+#
+# Scale-to-zero: min_machines_running=0 means the machine sleeps when
+# idle and Fly wakes it on incoming HTTP requests. Wake-up adds ~1s of
+# first-request latency, which is fine for a webhook bot.
+
+app = "odon-core"
+primary_region = "ams"
+
+[build]
+
+[env]
+  PORT = "3000"
+  NODE_ENV = "production"
+  LOG_LEVEL = "info"
+
+# DB migrations run once per deploy, before machines accept traffic.
+# Reads DATABASE_URL from secrets (set via `fly secrets set`).
+[deploy]
+  release_command = "node dist/db/migrate.js"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1

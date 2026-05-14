@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+.env
+.env.local
+.env.*
+screenshots
+content/images
+recordings
+*.log
+.DS_Store
+.vscode
+.idea
+.claude
