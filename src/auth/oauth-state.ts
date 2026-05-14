@@ -21,7 +21,12 @@
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
-const DEFAULT_TTL_SECONDS = 10 * 60;
+// 30 minutes. Long enough to absorb the "user has to add themselves as a
+// test user, fix browser session, find the right Google account" sequence
+// during setup, short enough that a stolen state token isn't a multi-hour
+// window of vulnerability. Real users tap and complete in seconds; this
+// margin only matters when something goes wrong mid-flow.
+const DEFAULT_TTL_SECONDS = 30 * 60;
 
 export interface OAuthStatePayload {
   /** session_member compound key, encoded as `sessionId:userId`. */
