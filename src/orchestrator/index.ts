@@ -7,4 +7,10 @@ export type {
   CreateSessionFromMessageInput,
   CreatedSession,
 } from "./sessions.js";
+export { joinSessionByShortCode } from "./members.js";
+export type {
+  JoinByShortCodeDeps,
+  JoinByShortCodeInput,
+  JoinOutcome,
+} from "./members.js";
 export { generateShortCode } from "./short-code.js";

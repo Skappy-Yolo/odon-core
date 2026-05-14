@@ -8,8 +8,13 @@
 
 import type { Pool, PoolClient } from "pg";
 import type {
+  CalendarProvider,
+  CalendarScope,
+  CalendarTokenRow,
   GroupRow,
   RailId,
+  SessionMemberRow,
+  SessionMemberStatus,
   SessionRow,
   SessionStatus,
   UserRow,
@@ -119,3 +124,105 @@ export async function updateSessionStatus(
     [status, sessionId],
   );
 }
+
+export interface AddSessionMemberInput {
+  readonly sessionId: string;
+  readonly userId: string;
+}
+
+/**
+ * Add a user to a session if not already a member. Returns the resulting
+ * row. Idempotent: re-adding the same user is a no-op (we just return
+ * the existing row).
+ */
+export async function addSessionMember(
+  q: Queryable,
+  input: AddSessionMemberInput,
+): Promise<SessionMemberRow> {
+  const result = await q.query<SessionMemberRow>(
+    `INSERT INTO session_members (session_id, user_id)
+     VALUES ($1, $2)
+     ON CONFLICT (session_id, user_id) DO UPDATE
+       SET joined_at = session_members.joined_at
+     RETURNING *`,
+    [input.sessionId, input.userId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error("addSessionMember: no row returned");
+  return row;
+}
+
+export async function getSessionMember(
+  q: Queryable,
+  sessionId: string,
+  userId: string,
+): Promise<SessionMemberRow | null> {
+  const result = await q.query<SessionMemberRow>(
+    "SELECT * FROM session_members WHERE session_id = $1 AND user_id = $2",
+    [sessionId, userId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function markSessionMemberConnected(
+  q: Queryable,
+  sessionId: string,
+  userId: string,
+): Promise<void> {
+  await q.query(
+    `UPDATE session_members
+       SET status = 'connected', calendar_connected_at = now()
+       WHERE session_id = $1 AND user_id = $2`,
+    [sessionId, userId],
+  );
+}
+
+export interface SaveCalendarTokenInput {
+  readonly userId: string;
+  readonly provider: CalendarProvider;
+  readonly scope: CalendarScope;
+  readonly encryptedAccessToken: Buffer;
+  readonly encryptedRefreshToken: Buffer | null;
+  readonly expiresAt: Date | null;
+}
+
+/**
+ * Save (or refresh) a user's encrypted OAuth token for a provider.
+ * `(user_id, provider)` is unique; re-OAuth overwrites the row, which
+ * is the behaviour we want when refresh tokens rotate.
+ */
+export async function saveCalendarToken(
+  q: Queryable,
+  input: SaveCalendarTokenInput,
+): Promise<CalendarTokenRow> {
+  const result = await q.query<CalendarTokenRow>(
+    `INSERT INTO calendar_tokens (user_id, provider, scope, encrypted_access_token, encrypted_refresh_token, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (user_id, provider) DO UPDATE
+       SET scope = EXCLUDED.scope,
+           encrypted_access_token = EXCLUDED.encrypted_access_token,
+           encrypted_refresh_token = COALESCE(EXCLUDED.encrypted_refresh_token, calendar_tokens.encrypted_refresh_token),
+           expires_at = EXCLUDED.expires_at,
+           updated_at = now()
+     RETURNING *`,
+    [
+      input.userId,
+      input.provider,
+      input.scope,
+      input.encryptedAccessToken,
+      input.encryptedRefreshToken,
+      input.expiresAt,
+    ],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error("saveCalendarToken: no row returned");
+  return row;
+}
+
+export async function getUserById(q: Queryable, userId: string): Promise<UserRow | null> {
+  const result = await q.query<UserRow>("SELECT * FROM users WHERE id = $1", [userId]);
+  return result.rows[0] ?? null;
+}
+
+// Re-export some commonly-used types for callers that import only this module.
+export type { SessionMemberStatus };

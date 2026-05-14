@@ -5,12 +5,8 @@
  * - routeCommand(message) — sync, returns stub replies for unwired commands.
  *   Useful for tests that don't need the orchestrator.
  * - createCommandRouter(deps) — returns an async router that wires
- *   /find_time to the real session orchestrator. This is what src/index.ts
- *   uses in production when DB is configured.
- *
- * Parses the leading slash command from `message.text` and dispatches. Returns
- * an OutgoingMessage to be sent as a reply, or null if the message is not a
- * command we handle.
+ *   /find_time to the session orchestrator, /start <code> to the
+ *   deep-link join flow, and produces the Google OAuth DM.
  */
 
 import type {
@@ -19,8 +15,12 @@ import type {
 } from "../../core/contract.js";
 import {
   createSessionFromMessage,
+  joinSessionByShortCode,
   type CreateSessionDeps,
 } from "../../orchestrator/index.js";
+import type { GoogleOAuthConfig } from "../../auth/google-oauth.js";
+import type { OAuthStateSigner } from "../../auth/oauth-state.js";
+import { buildAuthorizeUrl } from "../../auth/google-oauth.js";
 
 export type CommandName = "start" | "find_time" | "where" | "confirm" | "help";
 
@@ -31,11 +31,6 @@ export interface ParsedCommand {
   readonly rest: string;
 }
 
-/**
- * Extracts the command name from a message body. Returns null if the
- * message does not start with `/`, or if the command is not one we
- * recognise. Strips bot mentions like `/start@OdonBot` to just `/start`.
- */
 export function parseCommand(text: string): ParsedCommand | null {
   if (!text.startsWith("/")) return null;
   const firstSpace = text.indexOf(" ");
@@ -50,17 +45,16 @@ export function parseCommand(text: string): ParsedCommand | null {
   return { name: candidate as CommandName, rest };
 }
 
-/**
- * Sync router: handles /start and /help with real replies, returns stub
- * replies for /find_time, /where, /confirm. Use this in tests; production
- * uses createCommandRouter.
- */
+/** Sync stub router (for tests / DB-less dev). */
 export function routeCommand(message: IncomingMessage): OutgoingMessage | null {
   const parsed = parseCommand(message.text);
   if (!parsed) return null;
 
   switch (parsed.name) {
     case "start":
+      // Sync path doesn't handle deep-link join (that needs the orchestrator).
+      // If there's a short_code in /start, the production router below
+      // wires it; here we just show the welcome.
       return startReply(message);
     case "help":
       return helpReply(message);
@@ -73,15 +67,12 @@ export function routeCommand(message: IncomingMessage): OutgoingMessage | null {
 
 export interface CommandRouterDeps {
   readonly orchestrator: CreateSessionDeps;
-  /** Optional override for the bot's username, used to build the share link. */
+  readonly googleConfig: GoogleOAuthConfig;
+  readonly stateSigner: OAuthStateSigner;
+  /** Used to build t.me/<botUsername>?start=<short_code> join links. */
   readonly botUsername?: string;
 }
 
-/**
- * Production router. /find_time now creates a real session via the
- * orchestrator. /start, /help, /where, /confirm behave the same as the
- * sync routeCommand for now.
- */
 export function createCommandRouter(deps: CommandRouterDeps) {
   return async function route(message: IncomingMessage): Promise<OutgoingMessage | null> {
     const parsed = parseCommand(message.text);
@@ -89,6 +80,9 @@ export function createCommandRouter(deps: CommandRouterDeps) {
 
     switch (parsed.name) {
       case "start":
+        if (parsed.rest.length > 0) {
+          return joinDeepLinkReply(deps, message, parsed.rest);
+        }
         return startReply(message);
       case "help":
         return helpReply(message);
@@ -137,6 +131,63 @@ async function findTimeReply(
   }
 }
 
+/**
+ * Triggered by Telegram's deep-link mechanism: user taps
+ * `https://t.me/<bot>?start=<code>` and Telegram sends `/start <code>`.
+ *
+ * Looks up the session, adds the user as a session_member, replies with
+ * a Google OAuth URL the user can tap to connect their calendar.
+ */
+async function joinDeepLinkReply(
+  deps: CommandRouterDeps,
+  message: IncomingMessage,
+  shortCode: string,
+): Promise<OutgoingMessage> {
+  const code = shortCode.trim();
+  let outcome;
+  try {
+    outcome = await joinSessionByShortCode(deps.orchestrator, { message, shortCode: code });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { target: targetFor(message), text: `Couldn't join: ${msg}` };
+  }
+
+  if (outcome.kind === "session_not_found") {
+    return {
+      target: targetFor(message),
+      text: `No open session with code "${code}". Ask the person who started it to share the link again.`,
+    };
+  }
+  if (outcome.kind === "session_not_open") {
+    return {
+      target: targetFor(message),
+      text: `That session is no longer open. Start a fresh one with /find_time in your group.`,
+    };
+  }
+
+  // outcome.kind === "joined"
+  if (outcome.memberStatus === "connected") {
+    return {
+      target: targetFor(message),
+      text: `You're already connected to "${outcome.session.label}". Sit tight; I'll post when there's a result.`,
+    };
+  }
+
+  const state = deps.stateSigner.sign(`${outcome.session.id}:${outcome.user.id}`);
+  const authorizeUrl = buildAuthorizeUrl(deps.googleConfig, state.token);
+
+  const lines = [
+    `Joined "${outcome.session.label}".`,
+    "",
+    "Connect your Google Calendar so I can find times that work for the group. I only read free/busy windows, never your event titles, attendees, or locations.",
+    "",
+    authorizeUrl,
+    "",
+    "(If you use Outlook or iCloud instead of Google, those providers are coming in follow-up commits.)",
+  ];
+  return { target: targetFor(message), text: lines.join("\n") };
+}
+
 function composeSessionCreatedReply(
   result: {
     session: { short_code: string; label: string; deadline: Date };
@@ -146,7 +197,7 @@ function composeSessionCreatedReply(
 ): string {
   const { session, group } = result;
   const groupName = group?.display_name ?? "this group";
-  const deadline = formatDeadline(session.deadline);
+  const deadline = session.deadline.toUTCString();
   const lines = [
     `Created session "${session.label}" for ${groupName}.`,
     `Code: ${session.short_code}`,
@@ -155,19 +206,20 @@ function composeSessionCreatedReply(
   if (botUsername) {
     lines.push(
       "",
-      `Share this link with the group:`,
+      `Members tap to join + connect their calendar:`,
       `https://t.me/${botUsername}?start=${session.short_code}`,
+    );
+  } else {
+    lines.push(
+      "",
+      `Members DM me \`/start ${session.short_code}\` to join.`,
     );
   }
   lines.push(
     "",
-    "Next step (coming): each member connects their calendar and the bot proposes times where most of you are free.",
+    "Once enough of you connect, I'll propose times that work for everyone.",
   );
   return lines.join("\n");
-}
-
-function formatDeadline(d: Date): string {
-  return d.toUTCString();
 }
 
 function startReply(message: IncomingMessage): OutgoingMessage {
