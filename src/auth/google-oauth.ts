@@ -13,6 +13,18 @@
 const AUTHORIZE_BASE = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_BASE = "https://oauth2.googleapis.com/token";
 const FREEBUSY_SCOPE = "https://www.googleapis.com/auth/calendar.freebusy";
+const CALENDARLIST_SCOPE = "https://www.googleapis.com/auth/calendar.calendarlist.readonly";
+
+/**
+ * Scopes we request, narrowest possible to fulfil the product need:
+ * - freebusy: read busy intervals only (no titles, attendees, locations)
+ * - calendarlist.readonly: enumerate the user's calendars (name + id only,
+ *   no event data) so we can query freebusy across ALL of their
+ *   calendars instead of only `primary`. Without this, users with the
+ *   common "primary + work + family" calendar setup get incorrect
+ *   results: events on non-primary calendars are invisible.
+ */
+const SCOPES = [FREEBUSY_SCOPE, CALENDARLIST_SCOPE].join(" ");
 
 export interface GoogleOAuthConfig {
   readonly clientId: string;
@@ -32,7 +44,7 @@ export function buildAuthorizeUrl(config: GoogleOAuthConfig, state: string): str
     client_id: config.clientId,
     redirect_uri: config.redirectUri,
     response_type: "code",
-    scope: FREEBUSY_SCOPE,
+    scope: SCOPES,
     access_type: "offline",
     // Force consent so we always get a refresh_token, even when the
     // user already authorized us before. Skipping this is the #1 way
@@ -83,7 +95,7 @@ export async function exchangeCodeForTokens(
     accessToken: json.access_token,
     refreshToken: json.refresh_token ?? null,
     expiresAt: new Date(Date.now() + json.expires_in * 1000),
-    scope: json.scope ?? FREEBUSY_SCOPE,
+    scope: json.scope ?? SCOPES,
   };
 }
 
@@ -142,6 +154,6 @@ export async function refreshAccessToken(
     // Callers fall back to the existing stored token when this is null.
     refreshToken: json.refresh_token ?? null,
     expiresAt: new Date(Date.now() + json.expires_in * 1000),
-    scope: json.scope ?? FREEBUSY_SCOPE,
+    scope: json.scope ?? SCOPES,
   };
 }

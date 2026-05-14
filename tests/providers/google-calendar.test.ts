@@ -106,6 +106,14 @@ describe("GoogleCalendarProvider.getFreeBusy", () => {
 
   it("fetches when cache is empty and token is still valid", async () => {
     const fetchSpy = fakeFetcher((url) => {
+      if (url.includes("calendarList")) {
+        return new Response(
+          JSON.stringify({
+            items: [{ id: "primary", summary: "My Calendar", selected: true, primary: true }],
+          }),
+          { status: 200 },
+        );
+      }
       if (url.includes("freeBusy")) {
         return new Response(
           JSON.stringify({
@@ -153,11 +161,13 @@ describe("GoogleCalendarProvider.getFreeBusy", () => {
     expect(result).toEqual([
       { start: new Date("2026-05-16T14:00:00Z"), end: new Date("2026-05-16T15:00:00Z") },
     ]);
-    expect(fetchSpy.calls).toHaveLength(1);
-    expect(fetchSpy.calls[0]?.url).toContain("freeBusy");
-    // The Bearer token sent in the Authorization header should be the
-    // plaintext we encrypted above (round-tripped through fakeVault).
-    expect(fetchSpy.calls[0]?.init?.headers).toEqual(
+    // Two outbound calls: first calendarList.list, then freeBusy.
+    expect(fetchSpy.calls).toHaveLength(2);
+    expect(fetchSpy.calls[0]?.url).toContain("calendarList");
+    expect(fetchSpy.calls[1]?.url).toContain("freeBusy");
+    // Both calls carry the same Bearer access token, the plaintext we
+    // encrypted above (round-tripped through fakeVault).
+    expect(fetchSpy.calls[1]?.init?.headers).toEqual(
       expect.objectContaining({ authorization: "Bearer ya29.valid-access" }),
     );
   });
@@ -174,6 +184,12 @@ describe("GoogleCalendarProvider.getFreeBusy", () => {
             scope: "https://www.googleapis.com/auth/calendar.freebusy",
             token_type: "Bearer",
           }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("calendarList")) {
+        return new Response(
+          JSON.stringify({ items: [{ id: "primary", summary: "My Calendar", selected: true }] }),
           { status: 200 },
         );
       }
@@ -293,6 +309,13 @@ describe("GoogleCalendarProvider.getFreeBusy", () => {
   it("forwards the AbortSignal to the underlying fetch", async () => {
     let sawSignal: AbortSignal | undefined;
     const fetchSpy = fakeFetcher((url, init) => {
+      if (url.includes("calendarList")) {
+        sawSignal = init?.signal as AbortSignal | undefined;
+        return new Response(
+          JSON.stringify({ items: [{ id: "primary", summary: "My Calendar", selected: true }] }),
+          { status: 200 },
+        );
+      }
       if (url.includes("freeBusy")) {
         sawSignal = init?.signal as AbortSignal | undefined;
         return new Response(JSON.stringify({ calendars: { primary: { busy: [] } } }), {

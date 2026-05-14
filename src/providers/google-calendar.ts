@@ -40,7 +40,16 @@ import {
 } from "../db/queries.js";
 
 const FREEBUSY_ENDPOINT = "https://www.googleapis.com/calendar/v3/freeBusy";
+const CALENDARLIST_ENDPOINT = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
 const REFRESH_MARGIN_MS = 60_000; // refresh if token expires within 60s
+
+/** What we extract from calendarList.list. Names are visible to the engine but never to the LLM. */
+interface CalendarListItem {
+  readonly id: string;
+  readonly summary: string;
+  readonly selected?: boolean;
+  readonly primary?: boolean;
+}
 
 export class GoogleNotConnectedError extends Error {
   constructor(userId: string) {
@@ -97,8 +106,25 @@ export class GoogleCalendarProvider implements FreeBusyProvider {
     // Step 2-3: locked refresh (if needed), all inside a single transaction.
     const accessToken = await this.getValidAccessToken(userId);
 
-    // Step 4: query Google freeBusy.
-    const busy = await this.queryFreeBusy(accessToken, windowStart, windowEnd, signal);
+    // Step 4a: list the user's calendars so we can ask Google about ALL of
+    // them, not just `primary`. Multi-calendar users (the common case)
+    // would otherwise see events on their "Work" / "Family" / subscribed
+    // calendars silently excluded. We respect Google's per-calendar
+    // `selected` flag — calendars the user has unchecked in their calendar
+    // sidebar stay out, matching their existing UX preference.
+    const calendars = await this.listCalendars(accessToken, signal);
+    const items = calendars
+      .filter((c) => c.selected !== false)
+      .map((c) => ({ id: c.id }));
+    if (items.length === 0) {
+      // No calendars selected at all is unusual but possible. Fall back
+      // to primary so the call still returns something useful.
+      items.push({ id: "primary" });
+    }
+
+    // Step 4b: query Google freeBusy across the selected calendars and
+    // merge busy intervals into one flat list.
+    const busy = await this.queryFreeBusy(accessToken, windowStart, windowEnd, signal, items);
 
     // Step 5: persist to cache (best-effort; cache failure doesn't fail the call).
     try {
@@ -193,11 +219,12 @@ export class GoogleCalendarProvider implements FreeBusyProvider {
     windowStart: Date,
     windowEnd: Date,
     signal: AbortSignal | undefined,
+    items: ReadonlyArray<{ readonly id: string }>,
   ): Promise<ReadonlyArray<{ readonly start: Date; readonly end: Date }>> {
     const body = JSON.stringify({
       timeMin: windowStart.toISOString(),
       timeMax: windowEnd.toISOString(),
-      items: [{ id: "primary" }],
+      items,
     });
 
     const response = await this.fetchImpl(FREEBUSY_ENDPOINT, {
@@ -221,11 +248,43 @@ export class GoogleCalendarProvider implements FreeBusyProvider {
       calendars?: Record<string, { busy?: ReadonlyArray<{ start?: string; end?: string }> }>;
     };
 
-    const primary = json.calendars?.["primary"];
-    const rawBusy = primary?.busy ?? [];
+    // Flatten busy intervals from every queried calendar into one list.
+    // Overlapping intervals are fine — the overlap detector treats all
+    // busy time the same regardless of which calendar reported it.
+    const allBusy: Array<{ start: Date; end: Date }> = [];
+    for (const calendarId of Object.keys(json.calendars ?? {})) {
+      const cal = json.calendars?.[calendarId];
+      const rawBusy = cal?.busy ?? [];
+      for (const b of rawBusy) {
+        if (b.start && b.end) {
+          allBusy.push({ start: new Date(b.start), end: new Date(b.end) });
+        }
+      }
+    }
+    return allBusy;
+  }
 
-    return rawBusy
-      .filter((b): b is { start: string; end: string } => Boolean(b.start && b.end))
-      .map((b) => ({ start: new Date(b.start), end: new Date(b.end) }));
+  private async listCalendars(
+    accessToken: string,
+    signal: AbortSignal | undefined,
+  ): Promise<ReadonlyArray<CalendarListItem>> {
+    const response = await this.fetchImpl(CALENDARLIST_ENDPOINT, {
+      method: "GET",
+      headers: { authorization: `Bearer ${accessToken}` },
+      signal,
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `Google calendarList.list failed (HTTP ${response.status}): ${text.slice(0, 300)}`,
+      );
+    }
+
+    const json = (await response.json()) as {
+      items?: ReadonlyArray<CalendarListItem>;
+    };
+
+    return json.items ?? [];
   }
 }
