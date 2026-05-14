@@ -290,6 +290,11 @@ export async function listSessionMembers(
   q: Queryable,
   sessionId: string,
 ): Promise<ReadonlyArray<SessionMemberWithUser>> {
+  // Note: sm.joined_at MUST be in GROUP BY (or wrapped in an aggregate)
+  // because ORDER BY references it. Without it, Postgres rightly refuses
+  // to guess which joined_at to sort by. Each (session_id, user_id) is
+  // unique in session_members, so adding joined_at to GROUP BY doesn't
+  // change the grouping cardinality.
   const result = await q.query<{
     user_id: string;
     platform_user_id: string;
@@ -312,7 +317,7 @@ export async function listSessionMembers(
      JOIN users u                  ON u.id = sm.user_id
      LEFT JOIN calendar_tokens ct  ON ct.user_id = u.id
      WHERE sm.session_id = $1
-     GROUP BY u.id, u.platform_user_id, u.display_name, u.rail, sm.status
+     GROUP BY u.id, u.platform_user_id, u.display_name, u.rail, sm.status, sm.joined_at
      ORDER BY sm.joined_at ASC`,
     [sessionId],
   );
