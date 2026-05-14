@@ -74,15 +74,13 @@ function registerTelegramAdapter(app: FastifyInstance): void {
       vault,
       oauthConfig: googleConfig,
     });
-    // googleProvider is constructed at boot so Sitting 3's /proceed
-    // wiring has it ready. Referenced via the void cast below so TS
-    // doesn't flag it as unused while we're between sittings.
-    void googleProvider;
     router = createCommandRouter({
       orchestrator: { db: pool },
       googleConfig,
       stateSigner,
       botUsername: process.env.TELEGRAM_BOT_USERNAME,
+      providers: { google: googleProvider },
+      vault,
     });
     registerOAuthRoutes(app, {
       db: pool,
@@ -90,7 +88,7 @@ function registerTelegramAdapter(app: FastifyInstance): void {
       vault,
       stateSigner,
     });
-    app.log.info("google calendar provider constructed (used in next sitting's /proceed)");
+    app.log.info("google calendar provider registered — /proceed runs against real free/busy");
   } else {
     if (!hasDatabase) app.log.info("DATABASE_URL not set — /find_time will reply with a stub");
     if (!googleConfig) app.log.info("Google OAuth env not fully set — calendar connection disabled");

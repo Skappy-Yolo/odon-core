@@ -21,10 +21,21 @@ import {
 import type { GoogleOAuthConfig } from "../../auth/google-oauth.js";
 import type { OAuthStateSigner } from "../../auth/oauth-state.js";
 import { buildAuthorizeUrl } from "../../auth/google-oauth.js";
+import { findGroupByPlatform, findOpenSessionForGroup } from "../../db/queries.js";
+import type { FreeBusyProvider } from "../../llm/dispatcher.js";
+import { proposeTimesHandler } from "../../llm/handlers/propose-times.js";
+import type { Pool } from "pg";
 
-export type CommandName = "start" | "find_time" | "where" | "confirm" | "help";
+export type CommandName = "start" | "find_time" | "where" | "confirm" | "help" | "proceed";
 
-const KNOWN: ReadonlyArray<CommandName> = ["start", "find_time", "where", "confirm", "help"];
+const KNOWN: ReadonlyArray<CommandName> = [
+  "start",
+  "find_time",
+  "where",
+  "confirm",
+  "help",
+  "proceed",
+];
 
 export interface ParsedCommand {
   readonly name: CommandName;
@@ -61,6 +72,7 @@ export function routeCommand(message: IncomingMessage): OutgoingMessage | null {
     case "find_time":
     case "where":
     case "confirm":
+    case "proceed":
       return stubReply(message, parsed.name);
   }
 }
@@ -71,6 +83,14 @@ export interface CommandRouterDeps {
   readonly stateSigner: OAuthStateSigner;
   /** Used to build t.me/<botUsername>?start=<short_code> join links. */
   readonly botUsername?: string;
+  /**
+   * Free/busy providers used by /proceed when calling propose_times.
+   * Optional so a dev build without DB/OAuth still wires the router
+   * (commands that don't need providers still work).
+   */
+  readonly providers?: Readonly<Record<string, FreeBusyProvider>>;
+  /** Token vault used inside propose_times' provider path. */
+  readonly vault?: import("../../auth/token-vault.js").TokenVault;
 }
 
 export function createCommandRouter(deps: CommandRouterDeps) {
@@ -88,11 +108,131 @@ export function createCommandRouter(deps: CommandRouterDeps) {
         return helpReply(message);
       case "find_time":
         return findTimeReply(deps, message, parsed.rest);
+      case "proceed":
+        return proceedReply(deps, message);
       case "where":
       case "confirm":
         return stubReply(message, parsed.name);
     }
   };
+}
+
+/**
+ * Handler for `/proceed`: pulls real free/busy for every connected member
+ * of the current group's open session and replies with the top time
+ * windows. No voting yet; that lands in 3.b. /proceed today is a manual
+ * trigger so we can verify the real provider works end-to-end before
+ * adding the inline-keyboard surface.
+ */
+async function proceedReply(
+  deps: CommandRouterDeps,
+  message: IncomingMessage,
+): Promise<OutgoingMessage> {
+  if (!message.group) {
+    return {
+      target: targetFor(message),
+      text: "Run /proceed inside a group, not in a DM. /proceed acts on the group's open session.",
+    };
+  }
+
+  // Look up the engine's group row and its open session.
+  const db = deps.orchestrator.db as Pool;
+  const group = await findGroupByPlatform(db, message.group.rail, message.group.platformGroupId);
+  if (!group) {
+    return {
+      target: targetFor(message),
+      text: "I haven't seen this group yet. Run /find_time first to start a session.",
+    };
+  }
+  const session = await findOpenSessionForGroup(db, group.id);
+  if (!session) {
+    return {
+      target: targetFor(message),
+      text: "No open session in this group. Start one with /find_time.",
+    };
+  }
+
+  // Build a DispatchContext and call propose_times directly. The
+  // dispatcher's auth + budget + audit machinery would also work, but
+  // /proceed is a deterministic user-triggered action (not LLM-driven),
+  // so going through the dispatcher would be ceremony without payoff.
+  // The dispatcher comes back into the picture when the LLM is wired
+  // for /find_time-style natural-language coordination.
+  const ctx = {
+    callerId: message.user.platformUserId,
+    sessionId: session.id,
+    rail: message.rail,
+    db,
+    ...(deps.vault ? { vault: deps.vault } : {}),
+    ...(deps.providers ? { providers: deps.providers } : {}),
+  };
+  const args = {
+    sessionId: session.id,
+    topN: 3,
+    minFreeCount: 2,
+  };
+
+  let result;
+  try {
+    // proposeTimesHandler.authorize is sync-ish here (synchronous boolean);
+    // we replicate the dispatcher's contract by checking it ourselves.
+    if (!proposeTimesHandler.authorize(ctx, args)) {
+      throw new Error("/proceed: not authorized to compute times for this session");
+    }
+    result = await proposeTimesHandler.execute(ctx, args);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      target: targetFor(message),
+      text: `Couldn't compute times: ${msg}`,
+    };
+  }
+
+  if (result.windows.length === 0) {
+    const unreachable = result.unreachableMemberIds.length;
+    const unreachableNote =
+      unreachable > 0
+        ? `\n\n${unreachable} member${unreachable === 1 ? "'s" : "s'"} calendar I couldn't read (auth or transport issue).`
+        : "";
+    return {
+      target: targetFor(message),
+      text:
+        `No windows where at least 2 of you are free in the next 7 days.${unreachableNote}\n\n` +
+        `Either more people need to connect their calendar, or you have very different schedules. Try widening the window or coordinate manually for this one.`,
+    };
+  }
+
+  const lines = [
+    `<b>Top ${result.windows.length} time${result.windows.length === 1 ? "" : "s"} for "${escapeHtml(session.label)}":</b>`,
+    "",
+  ];
+  result.windows.forEach((w, idx) => {
+    const start = new Date(w.startIso);
+    const end = new Date(w.endIso);
+    lines.push(`<b>${idx + 1}.</b> ${formatWindow(start, end)}  (${w.freeCount} free)`);
+  });
+  if (result.unreachableMemberIds.length > 0) {
+    lines.push("");
+    lines.push(
+      `<i>${result.unreachableMemberIds.length} member${result.unreachableMemberIds.length === 1 ? "'s" : "s'"} calendar couldn't be read this time — I'll DM them to reconnect.</i>`,
+    );
+  }
+  lines.push("");
+  lines.push("<i>Voting buttons land in the next commit; for now reply /confirm &lt;N&gt; to lock one in.</i>");
+
+  return {
+    target: targetFor(message),
+    text: lines.join("\n"),
+    format: "html",
+  };
+}
+
+function formatWindow(start: Date, end: Date): string {
+  // UTC, day + hour. Per-user timezones land later.
+  const day = start.toUTCString().slice(0, 11); // "Sat, 16 May"
+  const startHour = start.toUTCString().slice(17, 22); // "19:00"
+  const endHour = end.toUTCString().slice(17, 22);
+  return `${day} ${startHour}–${endHour} UTC`;
 }
 
 async function findTimeReply(

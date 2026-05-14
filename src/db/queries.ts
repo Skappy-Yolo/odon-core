@@ -114,6 +114,41 @@ export async function findSessionByShortCode(
   return result.rows[0] ?? null;
 }
 
+/**
+ * Find the most-recently-created open session for a group, if any.
+ * Used by `/proceed` to figure out which session the user is asking
+ * about when they don't pass a short_code explicitly.
+ */
+export async function findOpenSessionForGroup(
+  q: Queryable,
+  groupId: string,
+): Promise<SessionRow | null> {
+  const result = await q.query<SessionRow>(
+    `SELECT * FROM sessions
+       WHERE group_id = $1 AND status = 'open'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    [groupId],
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
+ * Look up a group by its (rail, platform_group_id) compound key.
+ * Returns null when the bot hasn't seen this group yet.
+ */
+export async function findGroupByPlatform(
+  q: Queryable,
+  rail: RailId,
+  platformGroupId: string,
+): Promise<GroupRow | null> {
+  const result = await q.query<GroupRow>(
+    "SELECT * FROM groups WHERE rail = $1 AND platform_group_id = $2",
+    [rail, platformGroupId],
+  );
+  return result.rows[0] ?? null;
+}
+
 export async function updateSessionStatus(
   q: Queryable,
   sessionId: string,
