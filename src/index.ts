@@ -9,6 +9,8 @@ import {
   type GoogleOAuthConfig,
 } from "./auth/index.js";
 import { registerOAuthRoutes } from "./http/oauth-routes.js";
+import { GoogleCalendarProvider } from "./providers/google-calendar.js";
+import type { FreeBusyProvider } from "./llm/dispatcher.js";
 
 const ALLOWED_LOG_LEVELS = ["fatal", "error", "warn", "info", "debug"] as const;
 type LogLevel = (typeof ALLOWED_LOG_LEVELS)[number];
@@ -64,20 +66,31 @@ function registerTelegramAdapter(app: FastifyInstance): void {
   let router: ((message: import("./core/contract.js").IncomingMessage) => Promise<import("./core/contract.js").OutgoingMessage | null>) | null = null;
 
   if (hasDatabase && googleConfig && encryptionKey) {
+    const pool = getPool();
     const vault = createTokenVault(encryptionKey);
     const stateSigner = createOAuthStateSigner(encryptionKey);
+    const googleProvider: FreeBusyProvider = new GoogleCalendarProvider({
+      pool,
+      vault,
+      oauthConfig: googleConfig,
+    });
+    // googleProvider is constructed at boot so Sitting 3's /proceed
+    // wiring has it ready. Referenced via the void cast below so TS
+    // doesn't flag it as unused while we're between sittings.
+    void googleProvider;
     router = createCommandRouter({
-      orchestrator: { db: getPool() },
+      orchestrator: { db: pool },
       googleConfig,
       stateSigner,
       botUsername: process.env.TELEGRAM_BOT_USERNAME,
     });
     registerOAuthRoutes(app, {
-      db: getPool(),
+      db: pool,
       googleConfig,
       vault,
       stateSigner,
     });
+    app.log.info("google calendar provider constructed (used in next sitting's /proceed)");
   } else {
     if (!hasDatabase) app.log.info("DATABASE_URL not set — /find_time will reply with a stub");
     if (!googleConfig) app.log.info("Google OAuth env not fully set — calendar connection disabled");

@@ -86,3 +86,62 @@ export async function exchangeCodeForTokens(
     scope: json.scope ?? FREEBUSY_SCOPE,
   };
 }
+
+/**
+ * Refresh an access token using a stored refresh_token.
+ *
+ * Used by the free/busy provider when the stored access token is within
+ * 60 seconds of expiring (eager refresh — we'd rather refresh slightly
+ * early than retry on 401). The refresh_token usually stays the same
+ * across refreshes, but Google occasionally rotates it; when the
+ * response includes a new refresh_token we save that one.
+ *
+ * Throws on transport / auth errors. The caller decides whether to
+ * mark the user's calendar as needing re-OAuth (when refresh itself
+ * returns 400/401 with `invalid_grant`) or to just retry later
+ * (transient 5xx).
+ */
+export async function refreshAccessToken(
+  config: GoogleOAuthConfig,
+  refreshToken: string,
+  fetchImpl: typeof fetch = globalThis.fetch,
+): Promise<GoogleTokens> {
+  const body = new URLSearchParams({
+    refresh_token: refreshToken,
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    grant_type: "refresh_token",
+  });
+
+  const response = await fetchImpl(TOKEN_BASE, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Google token refresh failed (HTTP ${response.status}): ${text.slice(0, 300)}`);
+  }
+
+  const json = (await response.json()) as {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+    scope?: string;
+    token_type?: string;
+  };
+
+  if (!json.access_token || !json.expires_in) {
+    throw new Error("Google token refresh: missing access_token or expires_in");
+  }
+
+  return {
+    accessToken: json.access_token,
+    // Google usually omits refresh_token on refresh; keep the one we had.
+    // Callers fall back to the existing stored token when this is null.
+    refreshToken: json.refresh_token ?? null,
+    expiresAt: new Date(Date.now() + json.expires_in * 1000),
+    scope: json.scope ?? FREEBUSY_SCOPE,
+  };
+}

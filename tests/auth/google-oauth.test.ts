@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAuthorizeUrl,
   exchangeCodeForTokens,
+  refreshAccessToken,
   type GoogleOAuthConfig,
 } from "../../src/auth/google-oauth.js";
 
@@ -76,5 +77,56 @@ describe("exchangeCodeForTokens", () => {
       );
     const tokens = await exchangeCodeForTokens(CONFIG, "code", fakeFetch);
     expect(tokens.refreshToken).toBeNull();
+  });
+});
+
+describe("refreshAccessToken", () => {
+  it("returns a new access token + same refresh_token when Google doesn't rotate", async () => {
+    const fakeFetch: typeof fetch = async (_url, init) => {
+      const body = (init?.body ?? "") as string;
+      expect(body).toContain("grant_type=refresh_token");
+      expect(body).toContain("refresh_token=stored-rt");
+      return new Response(
+        JSON.stringify({
+          access_token: "ya29.new-access",
+          expires_in: 3600,
+          scope: "https://www.googleapis.com/auth/calendar.freebusy",
+          token_type: "Bearer",
+        }),
+        { status: 200 },
+      );
+    };
+    const tokens = await refreshAccessToken(CONFIG, "stored-rt", fakeFetch);
+    expect(tokens.accessToken).toBe("ya29.new-access");
+    expect(tokens.refreshToken).toBeNull(); // Google didn't return a new one
+    expect(tokens.expiresAt.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("captures a rotated refresh_token when Google sends one", async () => {
+    const fakeFetch: typeof fetch = async () =>
+      new Response(
+        JSON.stringify({
+          access_token: "ya29.new-access",
+          refresh_token: "1//rotated-rt",
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      );
+    const tokens = await refreshAccessToken(CONFIG, "old-rt", fakeFetch);
+    expect(tokens.refreshToken).toBe("1//rotated-rt");
+  });
+
+  it("throws on Google 400 invalid_grant (refresh_token revoked)", async () => {
+    const fakeFetch: typeof fetch = async () =>
+      new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+    await expect(refreshAccessToken(CONFIG, "bad-rt", fakeFetch)).rejects.toThrow(/HTTP 400/);
+  });
+
+  it("throws when Google omits access_token from the response", async () => {
+    const fakeFetch: typeof fetch = async () =>
+      new Response(JSON.stringify({ expires_in: 60 }), { status: 200 });
+    await expect(refreshAccessToken(CONFIG, "rt", fakeFetch)).rejects.toThrow(
+      /missing access_token/,
+    );
   });
 });
