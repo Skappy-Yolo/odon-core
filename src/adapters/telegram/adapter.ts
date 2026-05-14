@@ -47,6 +47,8 @@ export class TelegramAdapter implements Adapter {
     const payload: TelegramSendMessage = {
       chat_id: chatId,
       text: message.text,
+      ...(message.format === "html" ? { parse_mode: "HTML" as const } : {}),
+      ...(message.format === "markdown" ? { parse_mode: "Markdown" as const } : {}),
       ...(message.buttons && message.buttons.length > 0
         ? {
             reply_markup: {

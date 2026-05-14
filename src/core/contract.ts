@@ -72,6 +72,14 @@ export interface OutgoingMessage {
     | { readonly kind: "user"; readonly rail: RailId; readonly platformUserId: string }
     | { readonly kind: "group"; readonly rail: RailId; readonly platformGroupId: string };
   readonly text: string;
+  /**
+   * How `text` should be interpreted. Each adapter maps to its rail's
+   * native formatting. Default is "plain" (no formatting). "html" is the
+   * safest cross-rail choice because tag escaping is unambiguous.
+   * Note: callers using "html" must HTML-escape dynamic content; the
+   * adapter does not re-escape.
+   */
+  readonly format?: "plain" | "html" | "markdown";
   readonly buttons?: ReadonlyArray<{ readonly label: string; readonly value: string }>;
 }
 

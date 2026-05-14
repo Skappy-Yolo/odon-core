@@ -118,9 +118,11 @@ async function findTimeReply(
       message,
       label,
     });
+    const reply = composeSessionCreatedReply(result, deps.botUsername);
     return {
       target: targetFor(message),
-      text: composeSessionCreatedReply(result, deps.botUsername),
+      text: reply.text,
+      format: reply.format,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -176,16 +178,17 @@ async function joinDeepLinkReply(
   const state = deps.stateSigner.sign(`${outcome.session.id}:${outcome.user.id}`);
   const authorizeUrl = buildAuthorizeUrl(deps.googleConfig, state.token);
 
+  const label = escapeHtml(outcome.session.label);
   const lines = [
-    `Joined "${outcome.session.label}".`,
+    `Joined "<b>${label}</b>".`,
     "",
     "Connect your Google Calendar so I can find times that work for the group. I only read free/busy windows, never your event titles, attendees, or locations.",
     "",
-    authorizeUrl,
+    `<a href="${authorizeUrl}">Click here to connect your Google Calendar →</a>`,
     "",
-    "(If you use Outlook or iCloud instead of Google, those providers are coming in follow-up commits.)",
+    "<i>If you use Outlook or iCloud instead of Google, those providers are coming in follow-up commits.</i>",
   ];
-  return { target: targetFor(message), text: lines.join("\n") };
+  return { target: targetFor(message), text: lines.join("\n"), format: "html" };
 }
 
 function composeSessionCreatedReply(
@@ -194,32 +197,43 @@ function composeSessionCreatedReply(
     group: { display_name: string } | null;
   },
   botUsername?: string,
-): string {
+): { text: string; format: "html" } {
   const { session, group } = result;
-  const groupName = group?.display_name ?? "this group";
-  const deadline = session.deadline.toUTCString();
+  const label = escapeHtml(session.label);
+  const groupName = escapeHtml(group?.display_name ?? "this group");
+  const deadline = escapeHtml(session.deadline.toUTCString());
+  const code = escapeHtml(session.short_code);
   const lines = [
-    `Created session "${session.label}" for ${groupName}.`,
-    `Code: ${session.short_code}`,
+    `Created session "<b>${label}</b>" for <b>${groupName}</b>.`,
+    `Code: <code>${code}</code>`,
     `Deadline: ${deadline}`,
   ];
   if (botUsername) {
+    const joinUrl = `https://t.me/${botUsername}?start=${session.short_code}`;
     lines.push(
       "",
-      `Members tap to join + connect their calendar:`,
-      `https://t.me/${botUsername}?start=${session.short_code}`,
+      `<a href="${joinUrl}">Tap to join + connect your calendar →</a>`,
     );
   } else {
     lines.push(
       "",
-      `Members DM me \`/start ${session.short_code}\` to join.`,
+      `Members DM me <code>/start ${code}</code> to join.`,
     );
   }
   lines.push(
     "",
-    "Once enough of you connect, I'll propose times that work for everyone.",
+    "<i>Once enough of you connect, I'll propose times that work for everyone.</i>",
   );
-  return lines.join("\n");
+  return { text: lines.join("\n"), format: "html" };
+}
+
+/** Minimal HTML escaping for Telegram's parse_mode=HTML body. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function startReply(message: IncomingMessage): OutgoingMessage {
